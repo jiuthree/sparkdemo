@@ -1,0 +1,11 @@
+server:
+  port: 29000
+
+
+spring:
+  kafka:
+    bootstrap-servers: 106.14.212.123:9092
+    consumer:
+      group-id: testGroup
+    template:
+      default-topic: device_topic
