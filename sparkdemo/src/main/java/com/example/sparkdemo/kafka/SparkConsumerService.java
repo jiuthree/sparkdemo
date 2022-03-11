@@ -64,6 +64,8 @@ public class SparkConsumerService {
                 .map(cnt -> "Popular hash tags in last 60 seconds (" + cnt + " total tweets):")
                 .print();
 
+        lines.print();
+
         //
         lines.flatMap(text -> HashTagsUtils.hashTagsFromTweet(text))
                 .mapToPair(hashTag -> new Tuple2<>(hashTag, 1))

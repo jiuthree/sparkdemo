@@ -6,6 +6,6 @@ spring:
   kafka:
     bootstrap-servers: 106.14.212.123:9092
     consumer:
-      group-id: testGroup
+      group-id: testgroup
     template:
-      default-topic: device_topic
+      default-topic: spark_streaming
