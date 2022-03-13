@@ -9,3 +9,8 @@ spring:
       group-id: testgroup
     template:
       default-topic: spark_streaming
+
+
+my:
+  config:
+    test: Test
