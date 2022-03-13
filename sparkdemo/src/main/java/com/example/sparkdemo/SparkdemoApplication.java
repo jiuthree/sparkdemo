@@ -1,5 +1,6 @@
 package com.example.sparkdemo;
 
+import com.example.sparkdemo.entity.TDigestDataStruct;
 import com.example.sparkdemo.kafka.KafkaProducerService;
 import com.example.sparkdemo.kafka.SparkConsumerService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,12 +10,16 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SpringBootApplication
 public class SparkdemoApplication implements CommandLineRunner {
 
     private final SparkConsumerService sparkConsumerService;
     private final KafkaProducerService kafkaProducerService;
+
+    //暂时用它来代替redis
+    public static ConcurrentHashMap<String, TDigestDataStruct> TDigestDataMap = new ConcurrentHashMap<>();
 
 
     @Autowired
