@@ -7,7 +7,7 @@ import com.tdunning.math.stats.TDigest;
 import java.nio.ByteBuffer;
 
 public class TDigestUtils {
-    public TDigestDataStruct transferToAVLTDigestDS(TDigest tDigest,String key){
+    public static TDigestDataStruct transferToAVLTDigestDS(TDigest tDigest,String key){
         TDigestDataStruct tDigestDataStruct = new TDigestDataStruct();
         tDigestDataStruct.setKey(key);
         ByteBuffer buffer = ByteBuffer.allocate(tDigest.byteSize());
@@ -16,8 +16,16 @@ public class TDigestUtils {
         return tDigestDataStruct;
     }
 
-    public TDigest transferToAVLTDigest(TDigestDataStruct tDigestDataStruct){
+    public static TDigest transferToAVLTDigest(TDigestDataStruct tDigestDataStruct, String key){
         return AVLTreeDigest.fromBytes(ByteBuffer.wrap(tDigestDataStruct.getSerializedTDigest()));
+    }
+
+    public static double getQuantile(TDigest tDigest,double v){
+        return tDigest.quantile(v);
+    }
+
+    public static double getCdf(TDigest tDigest,double v){
+        return tDigest.cdf(v);
     }
 
 

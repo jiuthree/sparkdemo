@@ -1,5 +1,7 @@
 package com.example.sparkdemo.kafka;
 
+import com.example.sparkdemo.vo.MessageDataInfoVo;
+import com.google.gson.Gson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
@@ -28,12 +30,24 @@ public class KafkaProducerService {
         kafkaTemplate.send(topic, payload);
     }
 
+    public void send(String topic, String key, String data) {
+     //   log.info("sending key='{}' payload='{}' to topic='{}'",key, data, topic);
+        kafkaTemplate.send(topic,key,data);
+    }
+
     public void run(){
         Thread thread = new Thread(() -> {
+            int i = 0;
+            Gson gson = new Gson();
             while (true){
-                send(kafkaProperties.getTemplate().getDefaultTopic(),RandomWords());
+
+                for(int q=0;q<100000;i++,q++){
+                MessageDataInfoVo mes = new MessageDataInfoVo();
+                mes.setValue(String.valueOf(i));
+                send(kafkaProperties.getTemplate().getDefaultTopic(),"key",gson.toJson(mes));}
+                //send(kafkaProperties.getTemplate().getDefaultTopic(),RandomWords());
                 try {
-                    Thread.sleep(1000l);
+                    Thread.sleep(100l);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
