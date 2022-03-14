@@ -1,8 +1,7 @@
 package com.example.sparkdemo.kafka;
 
 //import com.example.sparkdemo.config.KafkaConsumerConfig;
-import com.example.sparkdemo.entity.TDigestDataStruct;
-import com.example.sparkdemo.util.HashTagsUtils;
+
 import com.example.sparkdemo.util.MyRedisUtils;
 import com.example.sparkdemo.util.TDigestUtils;
 import com.example.sparkdemo.vo.MessageDataInfoVo;
@@ -12,7 +11,6 @@ import com.tdunning.math.stats.TDigest;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.spark.SparkConf;
 import org.apache.spark.streaming.Durations;
-import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaInputDStream;
 import org.apache.spark.streaming.api.java.JavaPairDStream;
 import org.apache.spark.streaming.api.java.JavaStreamingContext;
@@ -32,29 +30,25 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class SparkConsumerService {
+    public static ConcurrentHashMap<String, AVLTreeDigest> AVLTreeDigestMap = new ConcurrentHashMap<>();
     private final Logger log = LoggerFactory.getLogger(SparkConsumerService.class);
     private final SparkConf sparkConf;
-
-    public static ConcurrentHashMap<String, AVLTreeDigest> AVLTreeDigestMap = new ConcurrentHashMap<>();
     //public static AVLTreeDigest avlTreeDigest = new AVLTreeDigest(100);
 
     //   private final Collection<String> topics;
- //   private final KafkaConsumerConfig kafkaConsumerConfig;
+    //   private final KafkaConsumerConfig kafkaConsumerConfig;
     //这个虽然没有用到这个变量，但是一样要注入，需要它来获取topics
     //private final KafkaProperties properties;
-
     private final org.springframework.boot.autoconfigure.kafka.KafkaProperties kafkaProperties;
-
-
 
 
     @Autowired
     public SparkConsumerService(SparkConf sparkConf, KafkaProperties kafkaProperties) {
         this.sparkConf = sparkConf;
-    //    this.kafkaConsumerConfig = kafkaConsumerConfig;
+        //    this.kafkaConsumerConfig = kafkaConsumerConfig;
 
         //这一步来注入topics
-       // this.topics = Arrays.asList(kafkaProperties.getTemplate().getDefaultTopic());
+        // this.topics = Arrays.asList(kafkaProperties.getTemplate().getDefaultTopic());
         this.kafkaProperties = kafkaProperties;
     }
 
@@ -72,57 +66,11 @@ public class SparkConsumerService {
                 ConsumerStrategies.Subscribe(Collections.singleton(kafkaProperties.getTemplate().getDefaultTopic()), kafkaProperties.buildConsumerProperties()));
 
 
-
         // Get the lines, split them into words, count the words and print
         //JavaDStream<String> lines = messages.map(stringStringConsumerRecord -> stringStringConsumerRecord.value());
 
 
-        JavaPairDStream<String, Tuple2<String, String>> datas = messages.mapToPair(stringStringConsumerRecord -> {
-            //     System.out.println(stringStringConsumerRecord.value());
-            MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
-            return new Tuple2<>(stringStringConsumerRecord.key(), new Tuple2<>(stringStringConsumerRecord.key(), messageDataInfo.getValue()));
-        });
-
-
-        //第一个元素是key，就是按照这个来分组计算的
-        JavaPairDStream<String, Tuple2<String, String>> stream = datas.reduceByKey(
-                (str1, str2) -> {
-                    double v = Double.parseDouble(str1._2());
-              //      System.out.println(v);
-
-                    // 这一步的逻辑要注意，应该是每一个分组用一个avlDigest
-                    AVLTreeDigest tDigest = AVLTreeDigestMap.getOrDefault(str1._1(), new AVLTreeDigest(100));
-                    //avlTreeDigest.add(v);
-                    tDigest.add(v);
-                    //每次修改完要记得put
-                    AVLTreeDigestMap.put(str1._1(),tDigest);
-                    //最后一个元素没有加上
-                    return str2;
-                }
-        );
-
-        stream.map((tuple2)->{
-        //先把最后一个元素给加上
-            double v = Double.parseDouble(tuple2._2()._2());
-       //     System.out.println(v);
-         //   avlTreeDigest.add(v);
-            AVLTreeDigest tDigest = AVLTreeDigestMap.getOrDefault(tuple2._2()._1(), new AVLTreeDigest(100));
-            //avlTreeDigest.add(v);
-            tDigest.add(v);
-
-
-            TDigest redisDigest = MyRedisUtils.aggregateAndSaveToRedis(tDigest, tuple2._1);
-
-            //要确保这个方法，线程安全
-            //avlTreeDigest = new AVLTreeDigest(100);
-            tDigest = new AVLTreeDigest(100);
-            AVLTreeDigestMap.put(tuple2._2()._1(),tDigest);
-            System.out.println("update!!!");
-            System.out.println("size:"+redisDigest.size());
-            System.out.println(TDigestUtils.getQuantile(redisDigest, 0.9));
-            return null;
-        }).print();
-
+        getQuantileByTDigest(messages, 0.9);
 
 //        datas.map(str->{
 //            double v = Double.parseDouble(str._2());
@@ -142,9 +90,6 @@ public class SparkConsumerService {
 //
 //            return v;
 //        }).print();
-
-
-
 
 
 //        //Count the tweets and print
@@ -178,5 +123,56 @@ public class SparkConsumerService {
             log.error("Interrupted: {}", e);
             // Restore interrupted state...
         }
+    }
+
+    public void getQuantileByTDigest(JavaInputDStream<ConsumerRecord<String, String>> messages, double quantile) {
+        JavaPairDStream<String, Tuple2<String, String>> datas = messages.mapToPair(stringStringConsumerRecord -> {
+            //     System.out.println(stringStringConsumerRecord.value());
+            MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
+            return new Tuple2<>(stringStringConsumerRecord.key(), new Tuple2<>(stringStringConsumerRecord.key(), messageDataInfo.getValue()));
+        });
+
+
+        //第一个元素是key，就是按照这个来分组计算的
+        JavaPairDStream<String, Tuple2<String, String>> stream =
+                datas.reduceByKey(
+                        (str1, str2) -> {
+                            double v = Double.parseDouble(str1._2());
+                            //      System.out.println(v);
+
+                            // 这一步的逻辑要注意，应该是每一个分组用一个avlDigest
+                            AVLTreeDigest tDigest = AVLTreeDigestMap.getOrDefault(str1._1(), new AVLTreeDigest(100));
+                            //avlTreeDigest.add(v);
+                            tDigest.add(v);
+                            //每次修改完要记得put
+                            AVLTreeDigestMap.put(str1._1(), tDigest);
+                            //最后一个元素没有加上
+                            return str2;
+                        }
+                );
+
+        stream.map((tuple2) -> {
+            //先把最后一个元素给加上
+            double v = Double.parseDouble(tuple2._2()._2());
+            //     System.out.println(v);
+            //   avlTreeDigest.add(v);
+            AVLTreeDigest tDigest = AVLTreeDigestMap.getOrDefault(tuple2._2()._1(), new AVLTreeDigest(100));
+            //avlTreeDigest.add(v);
+            tDigest.add(v);
+
+
+            TDigest redisDigest = MyRedisUtils.aggregateAndSaveToRedis(tDigest, tuple2._1);
+
+            //要确保这个方法，线程安全
+            //avlTreeDigest = new AVLTreeDigest(100);
+            tDigest = new AVLTreeDigest(100);
+            AVLTreeDigestMap.put(tuple2._2()._1(), tDigest);
+            //用log会报错,报的啥scala的序列化错误，不懂   好像是driver和worker节点的问题
+            System.out.println((("update!!!")));
+            System.out.println(("size:" + redisDigest.size()));
+            System.out.println(TDigestUtils.getQuantile(redisDigest, quantile));
+            return null;
+        }).print();
+
     }
 }

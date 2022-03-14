@@ -36,26 +36,26 @@ public class KafkaProducerService {
     }
 
     public void run(){
-        Thread thread = new Thread(() -> {
-            int i = 0;
-            Gson gson = new Gson();
-            while (true){
-
-                for(int q=0;q<100000;i++,q++){
-                MessageDataInfoVo mes = new MessageDataInfoVo();
-                mes.setValue(String.valueOf(i));
-                send(kafkaProperties.getTemplate().getDefaultTopic(),"key",gson.toJson(mes));}
-                //send(kafkaProperties.getTemplate().getDefaultTopic(),RandomWords());
-                try {
-                    Thread.sleep(100l);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-        }, "producer-thread");
-        thread.setDaemon(true);
-        thread.start();
-
+//        Thread thread = new Thread(() -> {
+//            int i = 0;
+//            Gson gson = new Gson();
+//            while (true){
+//
+//                for(int q=0;q<100000;i++,q++){
+//                MessageDataInfoVo mes = new MessageDataInfoVo();
+//                mes.setValue(String.valueOf(i));
+//                send(kafkaProperties.getTemplate().getDefaultTopic(),"key",gson.toJson(mes));}
+//                //send(kafkaProperties.getTemplate().getDefaultTopic(),RandomWords());
+//                try {
+//                    Thread.sleep(100l);
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+//            }
+//        }, "producer-thread");
+//        thread.setDaemon(true);
+//        thread.start();
+        test1();
     }
 
     private String RandomWords() {//产生随机单词
@@ -70,5 +70,27 @@ public class KafkaProducerService {
             res+=" "+s[b];
         }
         return res;
+    }
+
+    private void test1(){
+        Thread thread = new Thread(() -> {
+            int i = 0;
+            Gson gson = new Gson();
+            while (true){
+
+                for(int q=0;q<100000;i++,q++){
+                    MessageDataInfoVo mes = new MessageDataInfoVo();
+                    mes.setValue(String.valueOf(i));
+                    send(kafkaProperties.getTemplate().getDefaultTopic(),"key",gson.toJson(mes));}
+                //send(kafkaProperties.getTemplate().getDefaultTopic(),RandomWords());
+                try {
+                    Thread.sleep(100l);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "producer-thread");
+        thread.setDaemon(true);
+        thread.start();
     }
 }

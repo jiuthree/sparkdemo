@@ -20,7 +20,7 @@ public class TDigestUtils {
         return AVLTreeDigest.fromBytes(ByteBuffer.wrap(tDigestDataStruct.getSerializedTDigest()));
     }
 
-    public static double getQuantile(TDigest tDigest,double v){
+    public static double getQuantile(TDigest tDigest, double v){
         return tDigest.quantile(v);
     }
 
