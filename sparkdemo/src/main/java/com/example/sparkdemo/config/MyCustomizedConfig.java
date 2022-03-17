@@ -11,4 +11,5 @@ import org.springframework.stereotype.Component;
 @Data
 public class MyCustomizedConfig {
         String test;
+        String checkpointDir;
 }

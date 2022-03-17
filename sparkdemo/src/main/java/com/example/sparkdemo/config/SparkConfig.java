@@ -11,7 +11,8 @@ public class SparkConfig {
     public SparkConf sparkConf() {
         return new SparkConf()
                 .setAppName("SparkStreaming")
-                .setMaster("local[2]")
+                //本地起4个worker线程在本地运行spark程序
+                .setMaster("local[4]")
                 .set("spark.executor.memory","2g");
     }
 }

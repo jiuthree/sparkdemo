@@ -2,6 +2,7 @@ package com.example.sparkdemo.kafka;
 
 //import com.example.sparkdemo.config.KafkaConsumerConfig;
 
+import com.example.sparkdemo.config.MyCustomizedConfig;
 import com.example.sparkdemo.util.MyRedisUtils;
 import com.example.sparkdemo.util.TDigestUtils;
 import com.example.sparkdemo.vo.MessageDataInfoVo;
@@ -11,7 +12,10 @@ import com.tdunning.math.stats.TDigest;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.spark.SparkConf;
 import org.apache.spark.streaming.Durations;
+import org.apache.spark.streaming.State;
+import org.apache.spark.streaming.StateSpec;
 import org.apache.spark.streaming.api.java.JavaInputDStream;
+import org.apache.spark.streaming.api.java.JavaMapWithStateDStream;
 import org.apache.spark.streaming.api.java.JavaPairDStream;
 import org.apache.spark.streaming.api.java.JavaStreamingContext;
 import org.apache.spark.streaming.kafka010.ConsumerStrategies;
@@ -25,6 +29,8 @@ import org.springframework.stereotype.Service;
 import scala.Tuple2;
 
 import java.util.Collections;
+import java.util.List;
+import org.apache.spark.api.java.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 
@@ -33,6 +39,7 @@ public class SparkConsumerService {
     public static ConcurrentHashMap<String, AVLTreeDigest> AVLTreeDigestMap = new ConcurrentHashMap<>();
     private final Logger log = LoggerFactory.getLogger(SparkConsumerService.class);
     private final SparkConf sparkConf;
+    private final MyCustomizedConfig myCustomizedConfig;
     //public static AVLTreeDigest avlTreeDigest = new AVLTreeDigest(100);
 
     //   private final Collection<String> topics;
@@ -43,8 +50,9 @@ public class SparkConsumerService {
 
 
     @Autowired
-    public SparkConsumerService(SparkConf sparkConf, KafkaProperties kafkaProperties) {
+    public SparkConsumerService(SparkConf sparkConf, MyCustomizedConfig myCustomizedConfig, KafkaProperties kafkaProperties) {
         this.sparkConf = sparkConf;
+        this.myCustomizedConfig = myCustomizedConfig;
         //    this.kafkaConsumerConfig = kafkaConsumerConfig;
 
         //这一步来注入topics
@@ -56,7 +64,8 @@ public class SparkConsumerService {
         log.debug("Running Spark Consumer Service..");
 
         // Create context with a 0.2 seconds batch interval
-        JavaStreamingContext jssc = new JavaStreamingContext(sparkConf, Durations.milliseconds(200));
+        JavaStreamingContext jssc = new JavaStreamingContext(sparkConf, Durations.milliseconds(1000));
+        jssc.checkpoint(myCustomizedConfig.getCheckpointDir());
 
 
         // Create direct kafka stream with brokers and topics
@@ -70,8 +79,10 @@ public class SparkConsumerService {
         //JavaDStream<String> lines = messages.map(stringStringConsumerRecord -> stringStringConsumerRecord.value());
 
 
-        getQuantileByTDigest(messages, 0.9);
-
+        //getQuantileByTDigest(messages, 0.9);
+       // statisticsByHour(messages);
+       // testUpdateStateByKey(messages);
+        testMapWithState(messages);
 //        datas.map(str->{
 //            double v = Double.parseDouble(str._2());
 //            System.out.println(v);
@@ -174,5 +185,88 @@ public class SparkConsumerService {
             return null;
         }).print();
 
+    }
+
+    // todo 这个任务可以参照最近一小时的电量显示这个需求，刷新是每分钟刷新
+    public void statisticsByHour(JavaInputDStream<ConsumerRecord<String, String>> messages) {
+            JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
+                //     System.out.println(stringStringConsumerRecord.value());
+                MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
+                return new Tuple2<>(stringStringConsumerRecord.key(), messageDataInfo.getValue());
+            });
+
+            //统计最近一分钟的总量，每秒进行更新
+            datas.reduceByKeyAndWindow((str1,str2)->{
+               return String.valueOf(Double.parseDouble(str1)+Double.parseDouble(str2));
+            },Durations.seconds(60),Durations.seconds(1))
+                    .print();
+
+
+        }
+
+        //updateStateByKey可以实现有状态的流处理，类似的函数还有mapWithState ，如果没有这种机制想要实现类似的效果的话，就要利用Redis或者hdfs之类的第三方储存你，性能会下去很多
+    public void testUpdateStateByKey(JavaInputDStream<ConsumerRecord<String, String>> messages){
+        JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
+            //     System.out.println(stringStringConsumerRecord.value());
+            MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
+            //Double.parseDouble(messageDataInfo.getValue())
+            return new Tuple2<>(stringStringConsumerRecord.key(),messageDataInfo.getValue() );
+        });
+
+
+        datas.updateStateByKey(
+//                (values, state) -> {
+//                    Double out = 0.0;
+//                    if (state.isPresent()) {
+//                       out= out+ (double) state.get();
+//                    }
+//
+//                    for (Double value : values) {
+//                        out = out + value;
+//                    }
+//
+//                    //这个Optional的包很容易导错
+//                    return Optional.of(out);
+//                }
+
+                SparkConsumerService::updateFunc
+
+        ).print();
+        //要有这个print或者foreachRDD之类的输出操作，不然最后job不会执行的
+
+    }
+    public static Optional<String> updateFunc(List<String> newValue, Optional<String> OldValues){
+        double prev = OldValues.isPresent()? Double.parseDouble(OldValues.get()) : 0;
+        double v = newValue.stream().map(Double::parseDouble).reduce(0.0,(a,b)->{return a+b;});
+        return Optional.of(String.valueOf(prev+v));
+    }
+
+    //性能更好，扩展性更高
+    public void testMapWithState(JavaInputDStream<ConsumerRecord<String, String>> messages){
+
+        JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
+            //     System.out.println(stringStringConsumerRecord.value());
+            MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
+            //Double.parseDouble(messageDataInfo.getValue())
+            return new Tuple2<>(stringStringConsumerRecord.key(),messageDataInfo.getValue() );
+        });
+        //KeyType, ValueType, StateType, MappedType
+        JavaMapWithStateDStream<String, String, String, Tuple2<String, String>> res = datas.mapWithState(StateSpec.function(SparkConsumerService::mapWithStateFunction));
+        //stateSnapshots() 这个函数很重要，用来获取最新的快照，不然res会包含一堆以前更新完的数据
+        res.stateSnapshots().print();
+    }
+
+    public static Tuple2<String,String> mapWithStateFunction(String keyType, Optional<String> value, State<String> oldValue){
+        double sum =0.0;
+        if(value.isPresent()){
+            sum+= Double.parseDouble(value.get());
+        }
+        if(oldValue.exists()){
+
+            sum+= Double.parseDouble(oldValue.get());
+        }
+        oldValue.update(String.valueOf(sum));
+        //好处在于可以自己包装模型发送到下游，比如这个tuple，这是updateStateByKey做不到的
+        return new Tuple2<String,String>(keyType,String.valueOf(sum));
     }
 }

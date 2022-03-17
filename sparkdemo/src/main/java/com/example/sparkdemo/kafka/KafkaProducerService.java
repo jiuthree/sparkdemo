@@ -55,7 +55,7 @@ public class KafkaProducerService {
 //        }, "producer-thread");
 //        thread.setDaemon(true);
 //        thread.start();
-        test1();
+        test2();
     }
 
     private String RandomWords() {//产生随机单词
@@ -93,4 +93,32 @@ public class KafkaProducerService {
         thread.setDaemon(true);
         thread.start();
     }
+
+    private void test2(){
+        for(int num = 1;num<=5;num++) {
+            int finalNum = num;
+            Thread thread = new Thread(() -> {
+                int i = 0;
+                Gson gson = new Gson();
+                while (true) {
+
+                    for (int q = 0; q < 10; i++, q++) {
+                        MessageDataInfoVo mes = new MessageDataInfoVo();
+                        mes.setValue(String.valueOf(10));
+                        send(kafkaProperties.getTemplate().getDefaultTopic(), "key"+ finalNum, gson.toJson(mes));
+                    }
+                    //send(kafkaProperties.getTemplate().getDefaultTopic(),RandomWords());
+                    try {
+                        Thread.sleep(100l);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }, "producer-thread"+finalNum);
+            thread.setDaemon(true);
+            thread.start();
+        }
+    }
+
+
 }

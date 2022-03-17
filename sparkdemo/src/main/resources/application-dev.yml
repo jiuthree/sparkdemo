@@ -14,3 +14,4 @@ spring:
 my:
   config:
     test: Test
+    checkpoint-dir: E:/GraduationPro/mydemo/sparkdemo/checkpoint
