@@ -15,3 +15,4 @@ my:
   config:
     test: Test
     checkpoint-dir: E:/GraduationPro/mydemo/sparkdemo/checkpoint
+    send-topic: spark_streaming_store

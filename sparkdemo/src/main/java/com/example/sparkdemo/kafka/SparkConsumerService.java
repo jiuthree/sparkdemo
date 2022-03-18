@@ -11,6 +11,7 @@ import com.tdunning.math.stats.AVLTreeDigest;
 import com.tdunning.math.stats.TDigest;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.spark.SparkConf;
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.streaming.Durations;
 import org.apache.spark.streaming.State;
 import org.apache.spark.streaming.StateSpec;
@@ -25,17 +26,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import scala.Tuple2;
 
+import java.io.Serializable;
 import java.util.Collections;
 import java.util.List;
 import org.apache.spark.api.java.Optional;
+
+import javax.annotation.Resource;
 import java.util.concurrent.ConcurrentHashMap;
 
 
 @Service
-public class SparkConsumerService {
+public class SparkConsumerService  {
     public static ConcurrentHashMap<String, AVLTreeDigest> AVLTreeDigestMap = new ConcurrentHashMap<>();
     private final Logger log = LoggerFactory.getLogger(SparkConsumerService.class);
     private final SparkConf sparkConf;
@@ -48,6 +53,8 @@ public class SparkConsumerService {
     //private final KafkaProperties properties;
     private final org.springframework.boot.autoconfigure.kafka.KafkaProperties kafkaProperties;
 
+    @Resource
+    KafkaProducerService kafkaProducerService;
 
     @Autowired
     public SparkConsumerService(SparkConf sparkConf, MyCustomizedConfig myCustomizedConfig, KafkaProperties kafkaProperties) {
@@ -66,7 +73,12 @@ public class SparkConsumerService {
         // Create context with a 0.2 seconds batch interval
         JavaStreamingContext jssc = new JavaStreamingContext(sparkConf, Durations.milliseconds(1000));
         jssc.checkpoint(myCustomizedConfig.getCheckpointDir());
+      // jssc.sparkContext().broadcast(kafkaProducerService);
+        Broadcast<String> sendTopic = jssc.sparkContext().broadcast(myCustomizedConfig.getSendTopic());
 
+        KafkaProducerClient kpc=new KafkaProducerClient();
+
+        Broadcast<KafkaProducerClient> kafkaProducer = jssc.sparkContext().broadcast(kpc);
 
         // Create direct kafka stream with brokers and topics
         JavaInputDStream<ConsumerRecord<String, String>> messages = KafkaUtils.createDirectStream(
@@ -82,7 +94,7 @@ public class SparkConsumerService {
         //getQuantileByTDigest(messages, 0.9);
        // statisticsByHour(messages);
        // testUpdateStateByKey(messages);
-        testMapWithState(messages);
+        testMapWithState(messages,kafkaProducer,sendTopic);
 //        datas.map(str->{
 //            double v = Double.parseDouble(str._2());
 //            System.out.println(v);
@@ -242,7 +254,7 @@ public class SparkConsumerService {
     }
 
     //性能更好，扩展性更高
-    public void testMapWithState(JavaInputDStream<ConsumerRecord<String, String>> messages){
+    public void testMapWithState(JavaInputDStream<ConsumerRecord<String, String>> messages,Broadcast<KafkaProducerClient> kafkaProducer,Broadcast<String> sendTopic){
 
         JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
             //     System.out.println(stringStringConsumerRecord.value());
@@ -253,7 +265,20 @@ public class SparkConsumerService {
         //KeyType, ValueType, StateType, MappedType
         JavaMapWithStateDStream<String, String, String, Tuple2<String, String>> res = datas.mapWithState(StateSpec.function(SparkConsumerService::mapWithStateFunction));
         //stateSnapshots() 这个函数很重要，用来获取最新的快照，不然res会包含一堆以前更新完的数据
-        res.stateSnapshots().print();
+        res.stateSnapshots().foreachRDD(
+                rdd ->{
+                    rdd.sortByKey(true).collect()
+                            .forEach(
+                                    record->{
+                                        System.out.println(record);
+                                        KafkaSink.getInstance().send(sendTopic.getValue(),record._1,record._2);
+                                      //  kafkaProducer.getValue().send(sendTopic.getValue(),record._1,record._2);
+                                      //  System.out.println(myCustomizedConfig.getSendTopic());
+                                        //kafkaProducerService.send(myCustomizedConfig.getSendTopic(),record._1,record._2);
+                                    }
+                            );
+                }
+        );
     }
 
     public static Tuple2<String,String> mapWithStateFunction(String keyType, Optional<String> value, State<String> oldValue){

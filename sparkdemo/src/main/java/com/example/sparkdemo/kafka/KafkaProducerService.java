@@ -8,10 +8,11 @@ import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
+import java.io.Serializable;
 import java.util.Random;
 
 @Service
-public class KafkaProducerService {
+public class KafkaProducerService  {
 
     private final Logger log = LoggerFactory.getLogger(getClass());
 
