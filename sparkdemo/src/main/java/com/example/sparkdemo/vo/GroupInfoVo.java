@@ -5,12 +5,12 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
+import java.util.List;
 
 @Data
-@NoArgsConstructor
 @AllArgsConstructor
-public class KeyInfoVo implements Serializable {
-    GroupInfoVo groupInfo;
-    String key;
-    String extend;
+@NoArgsConstructor
+public class GroupInfoVo implements Serializable {
+    String infoId;
+    List<GroupInfoMetadata> metadataList;
 }

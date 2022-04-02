@@ -3,22 +3,22 @@ package com.example.sparkdemo.kafka;
 //import com.example.sparkdemo.config.KafkaConsumerConfig;
 
 import com.example.sparkdemo.config.MyCustomizedConfig;
+import com.example.sparkdemo.entity.DeviceStatisticsData;
 import com.example.sparkdemo.util.MyRedisUtils;
 import com.example.sparkdemo.util.TDigestUtils;
+import com.example.sparkdemo.vo.GroupInfoMetadata;
 import com.example.sparkdemo.vo.MessageDataInfoVo;
 import com.google.gson.Gson;
 import com.tdunning.math.stats.AVLTreeDigest;
 import com.tdunning.math.stats.TDigest;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.Optional;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.streaming.Durations;
 import org.apache.spark.streaming.State;
 import org.apache.spark.streaming.StateSpec;
-import org.apache.spark.streaming.api.java.JavaInputDStream;
-import org.apache.spark.streaming.api.java.JavaMapWithStateDStream;
-import org.apache.spark.streaming.api.java.JavaPairDStream;
-import org.apache.spark.streaming.api.java.JavaStreamingContext;
+import org.apache.spark.streaming.api.java.*;
 import org.apache.spark.streaming.kafka010.ConsumerStrategies;
 import org.apache.spark.streaming.kafka010.KafkaUtils;
 import org.apache.spark.streaming.kafka010.LocationStrategies;
@@ -26,33 +26,31 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import scala.Tuple2;
 
-import java.io.Serializable;
+import javax.annotation.Resource;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import org.apache.spark.api.java.Optional;
-
-import javax.annotation.Resource;
 import java.util.concurrent.ConcurrentHashMap;
 
 
 @Service
-public class SparkConsumerService  {
+public class SparkConsumerService {
+    public final static String WindowState = "WindowState";
+    public final static String MapState = "MapState";
+    public final static String Quantile = "Quantile";
     public static ConcurrentHashMap<String, AVLTreeDigest> AVLTreeDigestMap = new ConcurrentHashMap<>();
     private final Logger log = LoggerFactory.getLogger(SparkConsumerService.class);
+    //public static AVLTreeDigest avlTreeDigest = new AVLTreeDigest(100);
     private final SparkConf sparkConf;
     private final MyCustomizedConfig myCustomizedConfig;
-    //public static AVLTreeDigest avlTreeDigest = new AVLTreeDigest(100);
-
     //   private final Collection<String> topics;
     //   private final KafkaConsumerConfig kafkaConsumerConfig;
     //这个虽然没有用到这个变量，但是一样要注入，需要它来获取topics
     //private final KafkaProperties properties;
     private final org.springframework.boot.autoconfigure.kafka.KafkaProperties kafkaProperties;
-
     @Resource
     KafkaProducerService kafkaProducerService;
 
@@ -67,16 +65,39 @@ public class SparkConsumerService  {
         this.kafkaProperties = kafkaProperties;
     }
 
+    public static Optional<String> updateFunc(List<String> newValue, Optional<String> OldValues) {
+        double prev = OldValues.isPresent() ? Double.parseDouble(OldValues.get()) : 0;
+        double v = newValue.stream().map(Double::parseDouble).reduce(0.0, (a, b) -> {
+            return a + b;
+        });
+        return Optional.of(String.valueOf(prev + v));
+    }
+
+    public static Tuple2<String, String> mapWithStateFunction(String keyType, Optional<String> value, State<String> oldValue) {
+        double sum = 0.0;
+        if (value.isPresent()) {
+            sum += Double.parseDouble(value.get());
+        }
+        if (oldValue.exists()) {
+
+            sum += Double.parseDouble(oldValue.get());
+        }
+        oldValue.update(String.valueOf(sum));
+        //好处在于可以自己包装模型发送到下游，比如这个tuple，这是updateStateByKey做不到的
+        return new Tuple2<String, String>(keyType, String.valueOf(sum));
+    }
+
     public void run() {
         log.debug("Running Spark Consumer Service..");
 
         // Create context with a 0.2 seconds batch interval
         JavaStreamingContext jssc = new JavaStreamingContext(sparkConf, Durations.milliseconds(1000));
         jssc.checkpoint(myCustomizedConfig.getCheckpointDir());
-      // jssc.sparkContext().broadcast(kafkaProducerService);
+        jssc.sparkContext().setLogLevel("WARN");
+        // jssc.sparkContext().broadcast(kafkaProducerService);
         Broadcast<String> sendTopic = jssc.sparkContext().broadcast(myCustomizedConfig.getSendTopic());
-
-        KafkaProducerClient kpc=new KafkaProducerClient();
+        Broadcast<Double> quantile = jssc.sparkContext().broadcast(Double.parseDouble(myCustomizedConfig.getGetQuantile()));
+        KafkaProducerClient kpc = new KafkaProducerClient();
 
         Broadcast<KafkaProducerClient> kafkaProducer = jssc.sparkContext().broadcast(kpc);
 
@@ -92,9 +113,11 @@ public class SparkConsumerService  {
 
 
         //getQuantileByTDigest(messages, 0.9);
-       // statisticsByHour(messages);
-       // testUpdateStateByKey(messages);
-        testMapWithState(messages,kafkaProducer,sendTopic);
+        // statisticsByHour(messages);
+        // testUpdateStateByKey(messages);
+
+        //   testMapWithState(messages, kafkaProducer, sendTopic);
+
 //        datas.map(str->{
 //            double v = Double.parseDouble(str._2());
 //            System.out.println(v);
@@ -137,6 +160,171 @@ public class SparkConsumerService  {
 //                });
 
         // Start the computation
+
+
+        JavaDStream<MessageDataInfoVo> messageDataInfoVoJavaDStream = messages.map(consumerRecord -> {
+            MessageDataInfoVo messageDataInfoVo = new Gson().fromJson(consumerRecord.value(), MessageDataInfoVo.class);
+
+            return messageDataInfoVo;
+        });
+
+        JavaPairDStream<String, MessageDataInfoVo> messageDataInfoVoJavaPairDStream = messageDataInfoVoJavaDStream.mapToPair(messageDataInfoVo -> {
+
+            return new Tuple2<>(messageDataInfoVo.getKeyInfo().getKey(), messageDataInfoVo);
+        });
+
+
+        //返回的对象是个新的DStream ，老的DStream应该还没变，因为rdd是只读的
+
+
+        //先filter 看有没有这个WindowState这个操作
+        messageDataInfoVoJavaPairDStream.filter(data -> {
+                    List<GroupInfoMetadata> metadataList = data._2.getKeyInfo().getGroupInfo().getMetadataList();
+                    boolean flag = false;
+                    for (GroupInfoMetadata metadata : metadataList) {
+                        if (metadata.getValue().equals(WindowState)) {
+                            flag = true;
+                            break;
+                        }
+
+                    }
+                    return flag;
+
+
+                }).mapToPair(data -> {
+                            return new Tuple2<>(data._1+"#"+data._2.getName(), data._2.getValue());
+                        }
+                )
+                .reduceByKeyAndWindow((str1, str2) -> {
+
+
+                    return String.valueOf(Double.parseDouble(str1) + Double.parseDouble(str2));
+                }, Durations.seconds(60), Durations.seconds(1))
+                .foreachRDD((rdd, time) -> {
+                    rdd.sortByKey(true).collect().forEach(record->{
+                        System.out.println(record);
+                        DeviceStatisticsData statisticsData = new DeviceStatisticsData();
+                        statisticsData.setValue(record._2);
+                        statisticsData.setDescription(WindowState);
+                        statisticsData.setExtend(String.valueOf(time.milliseconds()));
+                        List<String> keyAndName = Arrays.asList(record._1.split("#"));
+                        statisticsData.setKeyinfo(keyAndName.get(0));
+                        statisticsData.setName(keyAndName.get(1));
+                        String kafkaMes = new Gson().toJson(statisticsData);
+                        KafkaSink.getInstance().send(sendTopic.getValue(), WindowState, kafkaMes);
+
+                    });
+                    System.out.println(time.milliseconds());
+                });
+
+        //这个可以测试那个DStream到底变没变
+        //messageDataInfoVoJavaDStream.print();
+
+        messageDataInfoVoJavaPairDStream.filter(data -> {
+                    List<GroupInfoMetadata> metadataList = data._2.getKeyInfo().getGroupInfo().getMetadataList();
+                    boolean flag = false;
+                    for (GroupInfoMetadata metadata : metadataList) {
+                        if (metadata.getValue().equals(MapState)) {  //空指针
+                            flag = true;
+                            break;
+                        }
+                    }
+                    return flag;
+                }).mapToPair(data -> {
+                    return new Tuple2<>(data._1+"#"+data._2.getName(), data._2.getValue());
+                })
+                .mapWithState(StateSpec.function(SparkConsumerService::mapWithStateFunction))
+                .stateSnapshots().foreachRDD(
+                        rdd -> {
+                            rdd.sortByKey(true).collect()
+                                    .forEach(
+                                            record -> {
+
+                                                System.out.println(record);
+                                                DeviceStatisticsData statisticsData = new DeviceStatisticsData();
+                                                statisticsData.setValue(record._2);
+                                                statisticsData.setDescription(MapState);
+                                                List<String> keyAndName = Arrays.asList(record._1.split("#"));
+                                                statisticsData.setKeyinfo(keyAndName.get(0));
+                                                statisticsData.setName(keyAndName.get(1));
+                                                String kafkaMes = new Gson().toJson(statisticsData);
+                                                KafkaSink.getInstance().send(sendTopic.getValue(), MapState, kafkaMes);
+                                                //   KafkaSink.getInstance().send(sendTopic.getValue(), record._1, record._2);
+                                                //  kafkaProducer.getValue().send(sendTopic.getValue(),record._1,record._2);
+                                                //  System.out.println(myCustomizedConfig.getSendTopic());
+                                                //kafkaProducerService.send(myCustomizedConfig.getSendTopic(),record._1,record._2);
+                                            }
+                                    );
+                        }
+                );
+
+
+        messageDataInfoVoJavaPairDStream.filter(data -> {
+                    List<GroupInfoMetadata> metadataList = data._2.getKeyInfo().getGroupInfo().getMetadataList();
+                    boolean flag = false;
+                    for (GroupInfoMetadata metadata : metadataList) {
+                        if (metadata.getValue().equals(Quantile)) {  //空指针
+                            flag = true;
+                            break;
+                        }
+                    }
+                    return flag;
+                }).mapToPair(data -> {
+                    return new Tuple2<>(data._1+"#"+data._2.getName(), new Tuple2<>(data._1+"#"+data._2.getName(), data._2.getValue()));
+                 //   return new Tuple2<>(data._1, new Tuple2<>(data._1, data._2.getValue()));
+                }).reduceByKey(
+                        (str1, str2) -> {
+                            double v = Double.parseDouble(str1._2());
+                            //      System.out.println(v);
+
+                            // 这一步的逻辑要注意，应该是每一个分组用一个avlDigest
+                            AVLTreeDigest tDigest = AVLTreeDigestMap.getOrDefault(str1._1(), new AVLTreeDigest(100));
+                            //avlTreeDigest.add(v);
+                            tDigest.add(v);
+                            //每次修改完要记得put
+                            AVLTreeDigestMap.put(str1._1(), tDigest);
+                            //最后一个元素没有加上
+                            return str2;
+                        }
+                )
+                .map((tuple2) -> {
+                    //先把最后一个元素给加上
+                    double v = Double.parseDouble(tuple2._2()._2());
+                    //     System.out.println(v);
+                    //   avlTreeDigest.add(v);
+                    AVLTreeDigest tDigest = AVLTreeDigestMap.getOrDefault(tuple2._2()._1(), new AVLTreeDigest(100));
+                    //avlTreeDigest.add(v);
+                    tDigest.add(v);
+
+
+                    TDigest redisDigest = MyRedisUtils.aggregateAndSaveToRedis(tDigest, tuple2._1);
+
+                    //要确保这个方法，线程安全
+                    //avlTreeDigest = new AVLTreeDigest(100);
+                    tDigest = new AVLTreeDigest(100);
+                    AVLTreeDigestMap.put(tuple2._2()._1(), tDigest);
+                    //用log会报错,报的啥scala的序列化错误，不懂   好像是driver和worker节点的问题
+                //    System.out.println((("update!!!")));
+                //    System.out.println(("size:" + redisDigest.size()));
+                    //System.out.println(TDigestUtils.getQuantile(redisDigest, 0.9));
+
+
+                    DeviceStatisticsData statisticsData = new DeviceStatisticsData();
+                    statisticsData.setExtend("size:" + redisDigest.size());
+                    statisticsData.setValue(String.valueOf(TDigestUtils.getQuantile(redisDigest, quantile.getValue())));
+                    statisticsData.setDescription(Quantile);
+                    List<String> keyAndName = Arrays.asList(tuple2._1.split("#"));
+                    statisticsData.setKeyinfo(keyAndName.get(0));
+                    statisticsData.setName(keyAndName.get(1));
+                    String kafkaMes = new Gson().toJson(statisticsData);
+                    KafkaSink.getInstance().send(sendTopic.getValue(),Quantile, kafkaMes);
+
+
+                    return Quantile;
+                }).print();
+        ;
+
+
         jssc.start();
 
 
@@ -147,6 +335,7 @@ public class SparkConsumerService  {
             // Restore interrupted state...
         }
     }
+
 
     public void getQuantileByTDigest(JavaInputDStream<ConsumerRecord<String, String>> messages, double quantile) {
         JavaPairDStream<String, Tuple2<String, String>> datas = messages.mapToPair(stringStringConsumerRecord -> {
@@ -201,28 +390,28 @@ public class SparkConsumerService  {
 
     // todo 这个任务可以参照最近一小时的电量显示这个需求，刷新是每分钟刷新
     public void statisticsByHour(JavaInputDStream<ConsumerRecord<String, String>> messages) {
-            JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
-                //     System.out.println(stringStringConsumerRecord.value());
-                MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
-                return new Tuple2<>(stringStringConsumerRecord.key(), messageDataInfo.getValue());
-            });
+        JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
+            //     System.out.println(stringStringConsumerRecord.value());
+            MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
+            return new Tuple2<>(stringStringConsumerRecord.key(), messageDataInfo.getValue());
+        });
 
-            //统计最近一分钟的总量，每秒进行更新
-            datas.reduceByKeyAndWindow((str1,str2)->{
-               return String.valueOf(Double.parseDouble(str1)+Double.parseDouble(str2));
-            },Durations.seconds(60),Durations.seconds(1))
-                    .print();
+        //统计最近一分钟的总量，每秒进行更新
+        datas.reduceByKeyAndWindow((str1, str2) -> {
+                    return String.valueOf(Double.parseDouble(str1) + Double.parseDouble(str2));
+                }, Durations.seconds(60), Durations.seconds(1))
+                .print();
 
 
-        }
+    }
 
-        //updateStateByKey可以实现有状态的流处理，类似的函数还有mapWithState ，如果没有这种机制想要实现类似的效果的话，就要利用Redis或者hdfs之类的第三方储存你，性能会下去很多
-    public void testUpdateStateByKey(JavaInputDStream<ConsumerRecord<String, String>> messages){
+    //updateStateByKey可以实现有状态的流处理，类似的函数还有mapWithState ，如果没有这种机制想要实现类似的效果的话，就要利用Redis或者hdfs之类的第三方储存你，性能会下去很多
+    public void testUpdateStateByKey(JavaInputDStream<ConsumerRecord<String, String>> messages) {
         JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
             //     System.out.println(stringStringConsumerRecord.value());
             MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
             //Double.parseDouble(messageDataInfo.getValue())
-            return new Tuple2<>(stringStringConsumerRecord.key(),messageDataInfo.getValue() );
+            return new Tuple2<>(stringStringConsumerRecord.key(), messageDataInfo.getValue());
         });
 
 
@@ -247,51 +436,32 @@ public class SparkConsumerService  {
         //要有这个print或者foreachRDD之类的输出操作，不然最后job不会执行的
 
     }
-    public static Optional<String> updateFunc(List<String> newValue, Optional<String> OldValues){
-        double prev = OldValues.isPresent()? Double.parseDouble(OldValues.get()) : 0;
-        double v = newValue.stream().map(Double::parseDouble).reduce(0.0,(a,b)->{return a+b;});
-        return Optional.of(String.valueOf(prev+v));
-    }
 
     //性能更好，扩展性更高
-    public void testMapWithState(JavaInputDStream<ConsumerRecord<String, String>> messages,Broadcast<KafkaProducerClient> kafkaProducer,Broadcast<String> sendTopic){
+    public void testMapWithState(JavaInputDStream<ConsumerRecord<String, String>> messages, Broadcast<KafkaProducerClient> kafkaProducer, Broadcast<String> sendTopic) {
 
         JavaPairDStream<String, String> datas = messages.mapToPair(stringStringConsumerRecord -> {
             //     System.out.println(stringStringConsumerRecord.value());
             MessageDataInfoVo messageDataInfo = new Gson().fromJson(stringStringConsumerRecord.value(), MessageDataInfoVo.class);
             //Double.parseDouble(messageDataInfo.getValue())
-            return new Tuple2<>(stringStringConsumerRecord.key(),messageDataInfo.getValue() );
+            return new Tuple2<>(stringStringConsumerRecord.key(), messageDataInfo.getValue());
         });
         //KeyType, ValueType, StateType, MappedType
         JavaMapWithStateDStream<String, String, String, Tuple2<String, String>> res = datas.mapWithState(StateSpec.function(SparkConsumerService::mapWithStateFunction));
         //stateSnapshots() 这个函数很重要，用来获取最新的快照，不然res会包含一堆以前更新完的数据
         res.stateSnapshots().foreachRDD(
-                rdd ->{
+                rdd -> {
                     rdd.sortByKey(true).collect()
                             .forEach(
-                                    record->{
+                                    record -> {
                                         System.out.println(record);
-                                        KafkaSink.getInstance().send(sendTopic.getValue(),record._1,record._2);
-                                      //  kafkaProducer.getValue().send(sendTopic.getValue(),record._1,record._2);
-                                      //  System.out.println(myCustomizedConfig.getSendTopic());
+                                        KafkaSink.getInstance().send(sendTopic.getValue(), record._1, record._2);
+                                        //  kafkaProducer.getValue().send(sendTopic.getValue(),record._1,record._2);
+                                        //  System.out.println(myCustomizedConfig.getSendTopic());
                                         //kafkaProducerService.send(myCustomizedConfig.getSendTopic(),record._1,record._2);
                                     }
                             );
                 }
         );
-    }
-
-    public static Tuple2<String,String> mapWithStateFunction(String keyType, Optional<String> value, State<String> oldValue){
-        double sum =0.0;
-        if(value.isPresent()){
-            sum+= Double.parseDouble(value.get());
-        }
-        if(oldValue.exists()){
-
-            sum+= Double.parseDouble(oldValue.get());
-        }
-        oldValue.update(String.valueOf(sum));
-        //好处在于可以自己包装模型发送到下游，比如这个tuple，这是updateStateByKey做不到的
-        return new Tuple2<String,String>(keyType,String.valueOf(sum));
     }
 }

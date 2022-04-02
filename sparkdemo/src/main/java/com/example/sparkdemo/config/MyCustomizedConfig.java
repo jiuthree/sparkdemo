@@ -15,4 +15,5 @@ public class MyCustomizedConfig {
         String test;
         String checkpointDir;
         String sendTopic;
+        String getQuantile;
 }

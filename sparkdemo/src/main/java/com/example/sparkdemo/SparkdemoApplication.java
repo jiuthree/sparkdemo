@@ -31,6 +31,7 @@ public class SparkdemoApplication implements CommandLineRunner {
 
     public static void main(String[] args) {
         SpringApplication.run(SparkdemoApplication.class, args);
+       // SpringApplication.run(SparkdemoApplication.class, args);
     }
 
     @Override

@@ -11,8 +11,36 @@ spring:
       default-topic: spark_streaming
 
 
+  datasource:
+    url:
+      jdbc:mysql://106.14.212.123:13306/spark_db?useUnicode=true&zeroDateTimeBehavior=convertToNull&autoReconnect=true&characterEncoding=utf-8
+    username:
+      root
+    password:
+      123456
+    hikari:
+      maxLifeTime: 600000
+  jpa:
+    database-platform:
+        org.hibernate.dialect.MySQL5InnoDBDialect
+    hibernate.ddl-auto:
+        update
+    show-sql:
+        true
+
+
+
 my:
   config:
     test: Test
     checkpoint-dir: E:/GraduationPro/mydemo/sparkdemo/checkpoint
     send-topic: spark_streaming_store
+    get-quantile: 0.5
+
+
+#日志级别配置  日志全关，世界清净了~
+logging:
+  level:
+    org.*: OFF        #Spring框架中的日志级别
+    com.*: OFF    #自己项目包名下的日志级别
+
