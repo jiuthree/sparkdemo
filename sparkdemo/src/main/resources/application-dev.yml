@@ -30,6 +30,33 @@ spring:
 
 
 
+    clickhouse:
+      # clickhouse引擎
+      driver-class-name: com.github.housepower.jdbc.ClickHouseDriver
+      # clickhouse的url
+      url: jdbc:clickhouse://106.14.212.123
+      # clickhouse的端口
+      port: 19000
+      # clickhouse的数据库
+      database: tutorial
+      # clickhouse的用户名
+      username: default
+      # clickhouse的密码
+      password:
+      # 是否开启自动创建表\更新表
+      table-update: true
+      # 连接池配置
+      hikari:
+        # 连接池的最大连接数
+        maximumPoolSize: 60
+        # 空闲超时
+        idleTimeout: 1000000
+        # 连接超时时间
+        connectionTimeout: 5000
+
+
+
+
 my:
   config:
     test: Test
@@ -39,8 +66,8 @@ my:
 
 
 #日志级别配置  日志全关，世界清净了~
-logging:
-  level:
-    org.*: OFF        #Spring框架中的日志级别
-    com.*: OFF    #自己项目包名下的日志级别
+#logging:
+#  level:
+#    org.*: OFF        #Spring框架中的日志级别
+#    com.*: OFF    #自己项目包名下的日志级别
 

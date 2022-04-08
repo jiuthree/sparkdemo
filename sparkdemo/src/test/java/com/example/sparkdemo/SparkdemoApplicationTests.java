@@ -1,15 +1,22 @@
 package com.example.sparkdemo;
 
 
+import com.example.sparkdemo.dao.ElectricityPB2EDao;
+import com.example.sparkdemo.entity.ElectricityPB2E;
+import com.example.sparkdemo.util.CsvUtil;
 import com.tdunning.math.stats.AVLTreeDigest;
 import com.tdunning.math.stats.TDigest;
 import org.junit.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import javax.annotation.Resource;
 import java.nio.ByteBuffer;
+import java.util.List;
 
 @SpringBootTest
 public class SparkdemoApplicationTests {
+
+
 
     @Test
     public void contextLoads() {
@@ -58,5 +65,8 @@ public class SparkdemoApplicationTests {
         // System.out.println(tDigest.centroidCount());
        // System.out.println(tDigest.recordAllData());
     }
+
+
+
 
 }
