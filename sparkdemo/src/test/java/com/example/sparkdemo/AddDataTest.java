@@ -1,7 +1,9 @@
 package com.example.sparkdemo;
 
 import com.example.sparkdemo.dao.ElectricityPB2EDao;
+import com.example.sparkdemo.dao.ElectricityPDao;
 import com.example.sparkdemo.dao.ElectricityPHPEDao;
+import com.example.sparkdemo.entity.ElectricityP;
 import com.example.sparkdemo.entity.ElectricityPB2E;
 import com.example.sparkdemo.entity.ElectricityPHPE;
 import com.example.sparkdemo.util.CsvUtil;
@@ -24,6 +26,9 @@ public class AddDataTest {
     @Resource
     ElectricityPHPEDao electricityPHPEDao;
 
+    @Resource
+    ElectricityPDao electricityPDao;
+
     @Test
     public void contextLoads() throws Exception {
         String csvPath = "E:\\GraduationPro\\PythonPro\\pro1\\AnomalyDetection-master\\resources\\dataset\\Electricity_PHPE.csv";
@@ -45,5 +50,13 @@ public class AddDataTest {
         List<ElectricityPHPE> datas = CsvUtil.convertCsvFileToObjects(ElectricityPHPE.class, csvPath);
         System.out.println(datas.size());
         electricityPHPEDao.batchCreate(datas);
+    }
+
+    @Test
+    public void addDataToClickHouse3() throws Exception {
+        String csvPath = "E:\\GraduationPro\\PythonPro\\pro1\\AnomalyDetection-master\\resources\\dataset\\Electricity_P.csv";
+        List<ElectricityP> datas = CsvUtil.convertCsvFileToObjects(ElectricityP.class, csvPath);
+        System.out.println(datas.size());
+        electricityPDao.batchCreate(datas);
     }
 }

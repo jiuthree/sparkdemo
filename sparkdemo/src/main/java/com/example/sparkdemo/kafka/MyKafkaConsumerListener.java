@@ -65,6 +65,14 @@ public class MyKafkaConsumerListener {
                     deviceStatisticsDataService.save(deviceStatisticsData);}
             }
 
+            case SparkConsumerService.AnalysisState:{
+                DeviceStatisticsData deviceStatisticsData = new Gson().fromJson(value, DeviceStatisticsData.class);
+                if(deviceStatisticsData != null){
+                    System.out.println(value);
+                    deviceStatisticsDataService.save(deviceStatisticsData);}
+
+            }
+
             default:{}
         }
     }

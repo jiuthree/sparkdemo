@@ -49,8 +49,8 @@ public class SparkdemoApplication implements CommandLineRunner {
     @Override
     public void run(String... args) throws Exception {
 
-   //     kafkaProducerService.run();
-   //     sparkConsumerService.run();
+        kafkaProducerService.run();
+        sparkConsumerService.run();
 
 
     }

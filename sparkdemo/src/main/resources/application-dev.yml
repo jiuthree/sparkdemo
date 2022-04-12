@@ -66,8 +66,8 @@ my:
 
 
 #日志级别配置  日志全关，世界清净了~
-#logging:
-#  level:
-#    org.*: OFF        #Spring框架中的日志级别
-#    com.*: OFF    #自己项目包名下的日志级别
+logging:
+  level:
+    org.*: OFF        #Spring框架中的日志级别
+    com.*: OFF    #自己项目包名下的日志级别
 

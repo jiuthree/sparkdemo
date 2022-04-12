@@ -41,6 +41,7 @@ public class SparkConsumerService {
     public final static String WindowState = "WindowState";
     public final static String MapState = "MapState";
     public final static String Quantile = "Quantile";
+    public final static String AnalysisState = "AnalysisState";
     public static ConcurrentHashMap<String, AVLTreeDigest> AVLTreeDigestMap = new ConcurrentHashMap<>();
     private final Logger log = LoggerFactory.getLogger(SparkConsumerService.class);
     //public static AVLTreeDigest avlTreeDigest = new AVLTreeDigest(100);
@@ -86,6 +87,49 @@ public class SparkConsumerService {
         //好处在于可以自己包装模型发送到下游，比如这个tuple，这是updateStateByKey做不到的
         return new Tuple2<String, String>(keyType, String.valueOf(sum));
     }
+
+    public static Tuple2<String, Tuple2<String, String>> analysisPowerStateFunction(String keyType, Optional<String> value, State<Tuple2<String, String>> oldValue) {
+        String extend = "";
+        double power = 0.0;
+        double oldPower = 0.0;
+        if (value.isPresent()) {
+            power = Double.parseDouble(value.get());
+        }
+        if (oldValue.exists()) {
+            extend = oldValue.get()._2();
+            oldPower = Double.parseDouble(oldValue.get()._1());
+            double gap = Math.abs(oldPower - power);
+            //出现了大于40%的波动变化，推测触发了操作
+            if (power * 0.4 < gap) {
+
+                if (power - oldPower > 0) {
+
+                    //由0.2倍的gap来推断是否原来是接近0W的
+                    if (gap * 0.2 - oldPower > 0) {
+                        extend = "设备开启";
+
+                    } else {
+                        extend = "设备工作功率升高，可能由非工作状态切换到工作状态";
+                    }
+
+                } else {
+                    //由0.2倍的gap来推断是否最后是接近0W的
+                    if (gap * 0.2 - power > 0) {
+                        extend = "设备关闭";
+
+                    } else {
+                        extend = "设备工作功率降低，可能由工作状态切换到非工作状态";
+                    }
+
+
+                }
+            }
+        }
+        oldValue.update(new Tuple2<>(String.valueOf(power), extend));
+        //好处在于可以自己包装模型发送到下游，比如这个tuple，这是updateStateByKey做不到的
+        return new Tuple2<String, Tuple2<String, String>>(keyType, new Tuple2<>(String.valueOf(power), extend));
+    }
+
 
     public void run() {
         log.debug("Running Spark Consumer Service..");
@@ -192,7 +236,7 @@ public class SparkConsumerService {
 
 
                 }).mapToPair(data -> {
-                            return new Tuple2<>(data._1+"#"+data._2.getName(), data._2.getValue());
+                            return new Tuple2<>(data._1 + "#" + data._2.getName(), data._2.getValue());
                         }
                 )
                 .reduceByKeyAndWindow((str1, str2) -> {
@@ -201,14 +245,15 @@ public class SparkConsumerService {
                     return String.valueOf(Double.parseDouble(str1) + Double.parseDouble(str2));
                 }, Durations.seconds(60), Durations.seconds(1))
                 .foreachRDD((rdd, time) -> {
-                    rdd.sortByKey(true).collect().forEach(record->{
+                    rdd.sortByKey(true).collect().forEach(record -> {
                         System.out.println(record);
                         DeviceStatisticsData statisticsData = new DeviceStatisticsData();
                         statisticsData.setValue(record._2);
-                        statisticsData.setDescription(WindowState);
+
                         statisticsData.setExtend(String.valueOf(time.milliseconds()));
                         List<String> keyAndName = Arrays.asList(record._1.split("#"));
                         statisticsData.setKeyinfo(keyAndName.get(0));
+                        statisticsData.setDescription(WindowState);
                         statisticsData.setName(keyAndName.get(1));
                         String kafkaMes = new Gson().toJson(statisticsData);
                         KafkaSink.getInstance().send(sendTopic.getValue(), WindowState, kafkaMes);
@@ -231,7 +276,7 @@ public class SparkConsumerService {
                     }
                     return flag;
                 }).mapToPair(data -> {
-                    return new Tuple2<>(data._1+"#"+data._2.getName(), data._2.getValue());
+                    return new Tuple2<>(data._1 + "#" + data._2.getName(), data._2.getValue());
                 })
                 .mapWithState(StateSpec.function(SparkConsumerService::mapWithStateFunction))
                 .stateSnapshots().foreachRDD(
@@ -243,12 +288,59 @@ public class SparkConsumerService {
                                                 System.out.println(record);
                                                 DeviceStatisticsData statisticsData = new DeviceStatisticsData();
                                                 statisticsData.setValue(record._2);
-                                                statisticsData.setDescription(MapState);
+
                                                 List<String> keyAndName = Arrays.asList(record._1.split("#"));
                                                 statisticsData.setKeyinfo(keyAndName.get(0));
+                                                statisticsData.setDescription(MapState);
                                                 statisticsData.setName(keyAndName.get(1));
                                                 String kafkaMes = new Gson().toJson(statisticsData);
                                                 KafkaSink.getInstance().send(sendTopic.getValue(), MapState, kafkaMes);
+                                                //   KafkaSink.getInstance().send(sendTopic.getValue(), record._1, record._2);
+                                                //  kafkaProducer.getValue().send(sendTopic.getValue(),record._1,record._2);
+                                                //  System.out.println(myCustomizedConfig.getSendTopic());
+                                                //kafkaProducerService.send(myCustomizedConfig.getSendTopic(),record._1,record._2);
+                                            }
+                                    );
+                        }
+                );
+
+
+        //先filter 看有没有这个WindowState这个操作
+        messageDataInfoVoJavaPairDStream.filter(data -> {
+                    List<GroupInfoMetadata> metadataList = data._2.getKeyInfo().getGroupInfo().getMetadataList();
+                    boolean flag = false;
+                    for (GroupInfoMetadata metadata : metadataList) {
+                        if (metadata.getValue().equals(AnalysisState)) {
+                            flag = true;
+                            break;
+                        }
+
+                    }
+                    return flag;
+
+
+                }).mapToPair(data -> {
+                            return new Tuple2<>(data._1 + "#" + data._2.getName(), data._2.getValue());
+                        }
+                )
+                .mapWithState(StateSpec.function(SparkConsumerService::analysisPowerStateFunction))
+                .stateSnapshots().foreachRDD(
+                        rdd -> {
+                            rdd.sortByKey(true).collect()
+                                    .forEach(
+                                            record -> {
+
+                                                System.out.println(record);
+                                                DeviceStatisticsData statisticsData = new DeviceStatisticsData();
+                                                statisticsData.setValue(record._2._1());
+
+                                                List<String> keyAndName = Arrays.asList(record._1.split("#"));
+                                                statisticsData.setKeyinfo(keyAndName.get(0));
+                                                statisticsData.setDescription(AnalysisState);
+                                                statisticsData.setExtend(record._2._2());
+                                                statisticsData.setName(keyAndName.get(1));
+                                                String kafkaMes = new Gson().toJson(statisticsData);
+                                                KafkaSink.getInstance().send(sendTopic.getValue(), AnalysisState, kafkaMes);
                                                 //   KafkaSink.getInstance().send(sendTopic.getValue(), record._1, record._2);
                                                 //  kafkaProducer.getValue().send(sendTopic.getValue(),record._1,record._2);
                                                 //  System.out.println(myCustomizedConfig.getSendTopic());
@@ -270,8 +362,8 @@ public class SparkConsumerService {
                     }
                     return flag;
                 }).mapToPair(data -> {
-                    return new Tuple2<>(data._1+"#"+data._2.getName(), new Tuple2<>(data._1+"#"+data._2.getName(), data._2.getValue()));
-                 //   return new Tuple2<>(data._1, new Tuple2<>(data._1, data._2.getValue()));
+                    return new Tuple2<>(data._1 + "#" + data._2.getName(), new Tuple2<>(data._1 + "#" + data._2.getName(), data._2.getValue()));
+                    //   return new Tuple2<>(data._1, new Tuple2<>(data._1, data._2.getValue()));
                 }).reduceByKey(
                         (str1, str2) -> {
                             double v = Double.parseDouble(str1._2());
@@ -304,20 +396,21 @@ public class SparkConsumerService {
                     tDigest = new AVLTreeDigest(100);
                     AVLTreeDigestMap.put(tuple2._2()._1(), tDigest);
                     //用log会报错,报的啥scala的序列化错误，不懂   好像是driver和worker节点的问题
-                //    System.out.println((("update!!!")));
-                //    System.out.println(("size:" + redisDigest.size()));
+                    //    System.out.println((("update!!!")));
+                    //    System.out.println(("size:" + redisDigest.size()));
                     //System.out.println(TDigestUtils.getQuantile(redisDigest, 0.9));
 
 
                     DeviceStatisticsData statisticsData = new DeviceStatisticsData();
                     statisticsData.setExtend("size:" + redisDigest.size());
                     statisticsData.setValue(String.valueOf(TDigestUtils.getQuantile(redisDigest, quantile.getValue())));
-                    statisticsData.setDescription(Quantile);
+
                     List<String> keyAndName = Arrays.asList(tuple2._1.split("#"));
                     statisticsData.setKeyinfo(keyAndName.get(0));
+                    statisticsData.setDescription(Quantile);
                     statisticsData.setName(keyAndName.get(1));
                     String kafkaMes = new Gson().toJson(statisticsData);
-                    KafkaSink.getInstance().send(sendTopic.getValue(),Quantile, kafkaMes);
+                    KafkaSink.getInstance().send(sendTopic.getValue(), Quantile, kafkaMes);
 
 
                     return Quantile;
